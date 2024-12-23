@@ -100,7 +100,7 @@ class JiraFieldUpdater:
             self.logger.error(f"Error loading configuration: {str(e)}")
             sys.exit(1)
 
-    def find_issues_without_field(self, project_key: str, field_id: str) -> List[str]:
+    def find_issues_without_field(self, project_key: str, field_id: str) -> List[dict]:
         """Find all issues in a project that don't have the specified field set."""
         issues = []
         start_at = 0
@@ -114,7 +114,7 @@ class JiraFieldUpdater:
                     "jql": jql,
                     "startAt": start_at,
                     "maxResults": batch_size,
-                    "fields": ["id"]
+                    "fields": ["id", "key"]  # Added key to the fields
                 }
                 
                 response = requests.post(
@@ -125,7 +125,8 @@ class JiraFieldUpdater:
                 response.raise_for_status()
                 result = response.json()
                 
-                batch_issues = [issue['id'] for issue in result['issues']]
+                # Now storing both id and key
+                batch_issues = [{"id": issue['id'], "key": issue['key']} for issue in result['issues']]
                 issues.extend(batch_issues)
                 
                 if len(batch_issues) < batch_size:
@@ -202,7 +203,7 @@ class JiraFieldUpdater:
                 }
             }
 
-            self.logger.debug(f"Update payload for {issue_id}: {payload}")  # Changed to debug
+            self.logger.debug(f"Update payload for issue {issue_id}: {payload}")
             
             response = requests.put(
                 endpoint, 
@@ -215,7 +216,7 @@ class JiraFieldUpdater:
                 self.logger.error(f"Response: {response.text}")
                 return False
                     
-            self.logger.debug(f"Successfully updated issue {issue_id}")  # Changed to debug
+            self.logger.debug(f"Successfully updated issue {issue_id}")
             return True
             
         except Exception as e:
@@ -329,7 +330,7 @@ class JiraFieldUpdater:
                     'issues_found': 0,
                     'issues_updated': 0,
                     'automation_rule': False,
-                    'failed_issues': []  # Added tracking for failed issues
+                    'failed_issues': []  # Will now store issue keys instead of just IDs
                 }
 
                 # Check if field is on screens
@@ -351,16 +352,16 @@ class JiraFieldUpdater:
                 
                 self.logger.info(f"Found {len(issues)} issues to update")
                 
-                for issue_id in issues:
-                    if not self.update_issue_field(issue_id, field_id, value):
-                        project_results['failed_issues'].append(issue_id)
+                for issue in issues:
+                    if not self.update_issue_field(issue['id'], field_id, value):
+                        project_results['failed_issues'].append(issue['key'])  # Store the key instead of ID
                     else:
                         project_results['issues_updated'] += 1
                 
                 if project_results['failed_issues']:
                     self.logger.warning(
                         f"\nFailed to update {len(project_results['failed_issues'])} issues in {project_key}:"
-                        f"\nFailed issue IDs: {', '.join(project_results['failed_issues'])}"
+                        f"\nFailed issues: {', '.join(project_results['failed_issues'])}"
                     )
 
                 # Create/update automation rule
