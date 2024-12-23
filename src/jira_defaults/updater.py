@@ -22,20 +22,30 @@ class JiraFieldUpdater:
             "Content-Type": "application/json"
         }
         
-        # Setup logging
+        # Setup logging with DEBUG level for file and INFO for console
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(
-                    log_dir / f'jira_update_{datetime.now().strftime("%Y%m%d")}.log'
-                ),
-                logging.StreamHandler()
-            ]
+        
+        # Create formatters
+        detailed_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        console_formatter = logging.Formatter('%(message)s')  # Simplified console output
+        
+        # Create handlers
+        file_handler = logging.FileHandler(
+            log_dir / f'jira_update_{datetime.now().strftime("%Y%m%d")}.log'
         )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(detailed_formatter)
+        
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(console_formatter)
+        
+        # Setup logger
         self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
 
         # Verify authentication
         self._verify_authentication()
@@ -47,10 +57,10 @@ class JiraFieldUpdater:
             metadata = self.get_field_metadata(field_id)
             if metadata:
                 self.field_metadata[field_id] = metadata
-                self.logger.info(f"Field {field_name} ({field_id}) metadata: {metadata}")
+                self.logger.debug(f"Field {field_name} ({field_id}) metadata: {metadata}")
             else:
-                self.logger.warning(f"Could not fetch metadata for field {field_name} ({field_id})")     
-
+                self.logger.warning(f"Could not fetch metadata for field {field_name} ({field_id})")
+                                
     def _verify_authentication(self):
         """Verify that we can authenticate with Jira."""
         try:
@@ -158,7 +168,6 @@ class JiraFieldUpdater:
     def get_field_options(self, field_id: str) -> dict:
         """Get available options for a select field."""
         try:
-            # Remove the 'customfield_' prefix as the API expects just the number
             field_num = field_id.replace('customfield_', '')
             response = requests.get(
                 f"{self.base_url}/rest/api/3/customField/{field_num}/option",
@@ -166,7 +175,7 @@ class JiraFieldUpdater:
             )
             response.raise_for_status()
             options = response.json()
-            self.logger.debug(f"Available options: {options}")
+            self.logger.debug(f"Available options: {options}")  # Changed to debug
             return options
         except requests.exceptions.RequestException as e:
             self.logger.error(f"Failed to get field options: {str(e)}")
@@ -193,19 +202,20 @@ class JiraFieldUpdater:
                 }
             }
 
-            self.logger.info(f"Updating issue {issue_id} with payload: {payload}")
+            self.logger.debug(f"Update payload for {issue_id}: {payload}")  # Changed to debug
             
-            response = requests.put(  # Changed from POST to PUT
+            response = requests.put(
                 endpoint, 
                 headers=self.headers, 
                 json=payload
             )
             
-            if response.status_code != 204:  # Jira returns 204 on successful update
-                self.logger.error(f"Unexpected status code: {response.status_code}")
+            if response.status_code != 204:  # Jira returns 204 on successful update            
+                self.logger.error(f"Failed to update issue {issue_id}: {response.status_code}")
                 self.logger.error(f"Response: {response.text}")
                 return False
                     
+            self.logger.debug(f"Successfully updated issue {issue_id}")  # Changed to debug
             return True
             
         except Exception as e:
@@ -309,16 +319,17 @@ class JiraFieldUpdater:
         results = {}
         
         for field_name, field_config in self.config['fields'].items():
-            self.logger.info(f"Processing field: {field_name}")
+            self.logger.info(f"\nProcessing field: {field_name}")
             field_results = {}
             field_id = field_config['id']
             
             for project_key, value in field_config['projects'].items():
-                self.logger.info(f"Processing project {project_key}")
+                self.logger.info(f"\nProcessing project {project_key}")
                 project_results = {
                     'issues_found': 0,
                     'issues_updated': 0,
-                    'automation_rule': False
+                    'automation_rule': False,
+                    'failed_issues': []  # Added tracking for failed issues
                 }
 
                 # Check if field is on screens
@@ -338,10 +349,20 @@ class JiraFieldUpdater:
                 issues = self.find_issues_without_field(project_key, field_id)
                 project_results['issues_found'] = len(issues)
                 
+                self.logger.info(f"Found {len(issues)} issues to update")
+                
                 for issue_id in issues:
-                    if self.update_issue_field(issue_id, field_id, value):
+                    if not self.update_issue_field(issue_id, field_id, value):
+                        project_results['failed_issues'].append(issue_id)
+                    else:
                         project_results['issues_updated'] += 1
                 
+                if project_results['failed_issues']:
+                    self.logger.warning(
+                        f"\nFailed to update {len(project_results['failed_issues'])} issues in {project_key}:"
+                        f"\nFailed issue IDs: {', '.join(project_results['failed_issues'])}"
+                    )
+
                 # Create/update automation rule
                 project_results['automation_rule'] = self.create_or_update_automation_rule(
                     project_key,
@@ -353,10 +374,12 @@ class JiraFieldUpdater:
                 field_results[project_key] = project_results
                 
                 self.logger.info(
-                    f"Project {project_key} completed: "
-                    f"{project_results['issues_updated']}/{project_results['issues_found']} "
+                    f"Project {project_key} completed:"
+                    f"\n  - Issues updated: {project_results['issues_updated']}/{project_results['issues_found']}"
+
                     f"issues updated, automation rule: "
                     f"{'created' if project_results['automation_rule'] else 'failed'}"
+
                 )
             
             results[field_name] = field_results
