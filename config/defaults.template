@@ -1,0 +1,15 @@
+# Jira instance configuration
+jira:
+  url: "https://your-domain.atlassian.net"
+  email: "your.email@example.com"     # Your Atlassian account email
+  token: "your-api-token"             # Your API token
+  
+# Field configurations
+fields:
+  lob:  # Line of Business field
+    id: "customfield_11196"
+    projects:
+      ARGE: "R&D"
+      PROJECT2: "Sales"
+      # Add more projects as needed:
+      # PROJECT_KEY: "LOB_VALUE"

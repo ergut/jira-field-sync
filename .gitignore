@@ -1,0 +1,43 @@
+config/*.yaml
+.git
+
+**/*.swp
+logs
+bak
+
+
+# Byte-compiled/optimized Python files
+*.py[cod]
+*.so
+__pycache__/
+
+# Distribution/build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env/
+
+# IDE/project files
+.vscode/
+.idea/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
