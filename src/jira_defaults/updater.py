@@ -267,7 +267,7 @@ class JiraFieldUpdater:
                 self.logger.error(f"Field {field_id} not found in available fields")
                 return False
                 
-            self.logger.info(f"Found field {field_id} ({field.get('name', 'Unknown')})")
+            self.logger.info(f"\nFound field {field_id} ({field.get('name', 'Unknown')})")
             
             # Try to get field configuration
             field_config_response = requests.get(
@@ -532,7 +532,7 @@ class JiraFieldUpdater:
                 self.logger.info(f"Found {len(issues)} issues to update")
                 
                 for issue in issues:
-                    if self.update_issue_field(issue['id'], field_id, value):
+                    if self.update_issue_field(issue['id'], field_id, value, dry_run):
                         project_results['issues_updated'] += 1
                         project_results['successful_issues'].append({
                             'key': issue['key'],
@@ -581,28 +581,111 @@ class JiraFieldUpdater:
             results[field_name] = field_results
         
         return results
+    
+    def get_field_status(self, project_key: str, field_id: str, target_value: str) -> dict:
+        """Get status report for a field in a project."""
+        try:
+            field_num = field_id.replace("customfield_", "")
+            jql = f'project = "{project_key}"'
+            
+            response = requests.post(
+                f"{self.base_url}/rest/api/3/search",
+                headers=self.headers,
+                json={
+                    "jql": jql,
+                    "fields": ["id", "key", field_id],
+                    "maxResults": 0  # Just get total count
+                }
+            )
+            response.raise_for_status()
+            total_issues = response.json()['total']
+
+            # Get issues with matching value
+            jql_match = f'project = "{project_key}" AND cf[{field_num}] = "{target_value}"'
+            response = requests.post(
+                f"{self.base_url}/rest/api/3/search",
+                headers=self.headers,
+                json={
+                    "jql": jql_match,
+                    "maxResults": 0
+                }
+            )
+            matches = response.json()['total']
+
+            # Get issues with different values
+            jql_different = f'project = "{project_key}" AND cf[{field_num}] != "{target_value}" AND cf[{field_num}] IS NOT EMPTY'
+            response = requests.post(
+                f"{self.base_url}/rest/api/3/search",
+                headers=self.headers,
+                json={
+                    "jql": jql_different,
+                    "maxResults": 0
+                }
+            )
+            different = response.json()['total']
+
+            # Calculate missing
+            missing = total_issues - matches - different
+
+            return {
+                "total": total_issues,
+                "matching": matches,
+                "different": different,
+                "missing": missing,
+                "matching_percent": round((matches / total_issues * 100) if total_issues > 0 else 0, 1),
+                "field_configured": self.check_field_screen_config(project_key, field_id)
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting status for {project_key}: {str(e)}")
+            return None
+
+    def print_status_report(self):
+        """Generate and print status report for all fields and projects."""
+        self.logger.info("\nField Status Report")
+        self.logger.info("=" * 50)
+        
+        for field_name, field_config in self.config['fields'].items():
+            self.logger.info(f"\nField: {field_name}")
+            field_id = field_config['id']
+            
+            for project_key, target_value in field_config['projects'].items():
+                status = self.get_field_status(project_key, field_id, target_value)
+                if status:
+                    project_type = self.project_types.get(project_key, 'undetermined')
+                    self.logger.info(f"  Project: {project_key} ({project_type})")
+                    self.logger.info(f"  Target Value: {target_value}")
+                    self.logger.info(f"  Field Configured: {'✓' if status['field_configured'] else '✗'}")
+                    self.logger.info(f"  Total Issues: {status['total']}")
+                    self.logger.info(f"  Matching Value: {status['matching']} ({status['matching_percent']}%)")
+                    self.logger.info(f"  Different Value: {status['different']}")
+                    self.logger.info(f"  Missing Value: {status['missing']}")  
 
 def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("config", help="Path to config file (e.g. config/defaults.yaml)")
     parser.add_argument("--dry-run", action="store_true", help="Show changes without applying them")
+    parser.add_argument("--status", action="store_true", help="Show field status report without updates")
     args = parser.parse_args()
     
     updater = JiraFieldUpdater(args.config)
-    results = updater.process_all_fields(dry_run=args.dry_run)
     
-    print("\nUpdate Summary:")
-    print("=" * 50)
-    for field_name, field_results in results.items():
-        print(f"\nField: {field_name}")
-        for project, stats in field_results.items():
-            print(f"\n  Project: {project} ({stats['project_type']})")
-            print(f"  Issues found without value: {stats['issues_found']}")
-            print(f"  Issues successfully updated: {stats['issues_updated']}")
-            print(f"  Automation rule: {'✓' if stats['automation_rule'] else '✗'}")
+    if args.status:
+        updater.print_status_report()
+    else:
+        results = updater.process_all_fields(dry_run=args.dry_run)
+        
+        print("\nUpdate Summary:")
+        print("=" * 50)
+        for field_name, field_results in results.items():
+            print(f"\nField: {field_name}")
+            for project, stats in field_results.items():
+                print(f"\n  Project: {project} ({stats['project_type']})")
+                print(f"  Issues found without value: {stats['issues_found']}")
+                print(f"  Issues successfully updated: {stats['issues_updated']}")
+                print(f"  Automation rule: {'✓' if stats['automation_rule'] else '✗'}")
 
-    print("\nCheck the log file for detailed information.")
+        print("\nCheck the log file for detailed information.")
 
 if __name__ == "__main__":
     main()
