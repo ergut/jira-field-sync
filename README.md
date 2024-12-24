@@ -1,4 +1,8 @@
-# Jira Project Defaults
+# jira-field-sync
+
+<div align="center">
+  <img src="assets/logo-nobg.png" alt="jira-field-sync logo" width="200"/>
+</div>
 
 A Python tool for managing project-level custom field defaults in Jira. Think of it as a "set it and forget it" solution for keeping your Jira fields consistent across projects.
 
@@ -34,20 +38,34 @@ Before you start:
 ## Installation
 
 ```bash
-pip install jira-project-defaults
+pip install jira-field-sync
 ```
 
 Or from source:
 
 ```bash
-git clone https://github.com/yourusername/jira-project-defaults
-cd jira-project-defaults
+git clone https://github.com/ergut/jira-field-sync
+cd jira-field-sync
 pip install -e .
 ```
 
+## Finding Field IDs
+
+Before configuring the tool, you'll need to find the IDs of your custom fields in Jira. Here's how:
+
+1. Go to Jira Settings > Issues
+2. Click on "Custom fields"
+   - Direct URL: `https://your-domain.atlassian.net/secure/admin/ViewCustomFields.jspa`
+3. Search for your field (e.g. "LOB")
+4. Click on it and then click "Edit details"
+5. In the URL or on the page, you'll see the ID number (e.g. `11196`)
+6. The field ID to use in configuration is `customfield_` followed by this number (e.g. `customfield_11196`)
+
+Note: You need admin access to view custom field settings.
+
 ## Configuration
 
-Create a `defaults.yaml` file based on the template:
+Create a `defaults.yaml` file in your preferred location:
 
 ```yaml
 # Jira instance configuration
@@ -69,27 +87,27 @@ fields:
 Each field configuration needs:
 
 - A descriptive name (e.g., "lob")
-- The Jira custom field ID
+- The Jira custom field ID (found using steps above)
 - A mapping of project keys to their default values
 
 ## Usage
 
-Basic usage:
+Basic usage (provide the full path to your config file):
 
 ```bash
-jira-defaults config/defaults.yaml
+jira-field-sync /path/to/your/defaults.yaml
 ```
 
 Check what would change without making updates:
 
 ```bash
-jira-defaults config/defaults.yaml --dry-run
+jira-field-sync /path/to/your/defaults.yaml --dry-run
 ```
 
 View current status:
 
 ```bash
-jira-defaults config/defaults.yaml --status
+jira-field-sync /path/to/your/defaults.yaml --status
 ```
 
 ## How It Works
@@ -114,6 +132,16 @@ The tool creates detailed logs in the `logs` directory:
 ## Contributing
 
 Contributions are welcome! Check out our [Roadmap](ROADMAP.md) for planned features and improvements.
+
+## Sponsorship
+
+This project is proudly sponsored by:
+
+<div align="center">
+  <a href="https://www.oredata.com">
+    <img src="assets/oredata-logo-nobg.png" alt="OREDATA" width="300"/>
+  </a>
+</div>
 
 ## License
 

@@ -3,8 +3,8 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jira-project-defaults"
-version = "0.1.0"
+name = "jira-field-sync"
+version = "0.2.0"
 description = "A tool to manage default configurations for Jira projects."
 authors = [{name = "Salih Ergüt", email = "salih.ergut@oredata.com"}]
 license = {text = "MIT"}
@@ -23,4 +23,4 @@ classifiers = [
 where = ["src"]
 
 [project.scripts]
-jira-defaults = "jira_defaults.updater:main"
+jira-field-sync = "jira_field_sync.updater:main"
