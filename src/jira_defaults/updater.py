@@ -10,19 +10,7 @@ import base64
 
 class JiraFieldUpdater:
     def __init__(self, config_path: str):
-        self.config = self._load_config(config_path)
-        self.base_url = self.config['jira']['url'].rstrip('/')
-        
-        # Setup Basic Auth
-        auth_str = f"{self.config['jira']['email']}:{self.config['jira']['token']}"
-        encoded_auth = base64.b64encode(auth_str.encode()).decode()
-        self.headers = {
-            "Accept": "application/json",
-            "Authorization": f"Basic {encoded_auth}",
-            "Content-Type": "application/json"
-        }
-        
-        # Setup logging with DEBUG level for file and INFO for console
+        # Setup logging first, before anything else
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
         
@@ -47,7 +35,22 @@ class JiraFieldUpdater:
         self.logger.addHandler(file_handler)
         self.logger.addHandler(console_handler)
 
-        # Verify authentication
+        # Now load config - logger is ready to handle any errors
+        self.config = self._load_config(config_path)
+        
+        # Setup base URL before auth-related operations
+        self.base_url = self.config['jira']['url'].rstrip('/')
+        
+        # Setup Basic Auth
+        auth_str = f"{self.config['jira']['email']}:{self.config['jira']['token']}"
+        encoded_auth = base64.b64encode(auth_str.encode()).decode()
+        self.headers = {
+            "Accept": "application/json",
+            "Authorization": f"Basic {encoded_auth}",
+            "Content-Type": "application/json"
+        }
+
+        # Now we can verify authentication since base_url and headers are set
         self._verify_authentication()
 
         # Get and store field metadata for all configured fields
@@ -84,7 +87,6 @@ class JiraFieldUpdater:
             sys.exit(1)
 
     def _load_config(self, config_path: str) -> dict:
-        """Load and validate the YAML configuration file."""
         try:
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
@@ -98,6 +100,49 @@ class JiraFieldUpdater:
                     if key not in current:
                         raise ValueError(f"Missing required configuration: {field}")
                     current = current[key]
+            
+            # Set up basic auth for validation
+            auth_str = f"{config['jira']['email']}:{config['jira']['token']}"
+            encoded_auth = base64.b64encode(auth_str.encode()).decode()
+            headers = {
+                "Accept": "application/json",
+                "Authorization": f"Basic {encoded_auth}",
+                "Content-Type": "application/json"
+            }
+            
+            # Validate field values against available options
+            for field_name, field_config in config['fields'].items():
+                field_id = field_config['id']
+                field_num = field_id.replace('customfield_', '')
+                
+                # Get field options
+                try:
+                    response = requests.get(
+                        f"{config['jira']['url'].rstrip('/')}/rest/api/3/customField/{field_num}/option",
+                        headers=headers
+                    )
+                    response.raise_for_status()
+                    options = response.json()
+                except requests.exceptions.RequestException as e:
+                    raise ValueError(f"Could not fetch options for field {field_name} ({field_id}): {str(e)}")
+                
+                # Get all valid options for easier reporting
+                valid_options = [opt['value'] for opt in options['values']]
+                
+                # Check each project's value
+                invalid_values = []
+                for project_key, value in field_config['projects'].items():
+                    normalized_value = value.strip().lower()
+                    if not any(opt.strip().lower() == normalized_value for opt in valid_options):
+                        invalid_values.append((project_key, value))
+                
+                if invalid_values:
+                    error_msg = (f"\nInvalid values found for field {field_name}:"
+                            f"\nValid options are: {valid_options}"
+                            f"\nInvalid project values:")
+                    for project_key, value in invalid_values:
+                        error_msg += f"\n  - Project {project_key}: '{value}'"
+                    raise ValueError(error_msg)
             
             return config
         except Exception as e:
@@ -230,9 +275,21 @@ class JiraFieldUpdater:
             if not options_response:
                 return False
             
-            option = next((opt for opt in options_response['values'] if opt['value'] == value), None)
+            # Normalize input value and try to find a match
+            normalized_value = value.strip().lower()
+            option = next(
+                (opt for opt in options_response['values'] 
+                 if opt['value'].strip().lower() == normalized_value), 
+                None
+            )
+            
             if not option:
-                self.logger.error(f"Value '{value}' not found in available options")
+                # Log available options to help with debugging
+                available_options = [opt['value'] for opt in options_response['values']]
+                self.logger.error(
+                    f"Value '{value}' not found in available options. "
+                    f"Available options are: {available_options}"
+                )
                 return False
 
             if dry_run:

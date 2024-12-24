@@ -8,6 +8,8 @@
 - Bulk update functionality for existing issues
 - Error handling and logging
 - Support for multiple projects
+- Enhanced LOB value update logic (empty OR different)
+- Better field option matching with validation
 
 ### Improvements
 - Replace issue IDs with issue keys in logs
@@ -15,8 +17,8 @@
 - Better error reporting
 - Add project type display in logs
 - Add issue type to success/failure logs
-- Enhanced LOB value update logic (empty OR different)
 - Add dry-run mode for testing
+- Graceful error handling for invalid field options
 
 ## 📅 Planned
 
