@@ -13,13 +13,16 @@
 - Replace issue IDs with issue keys in logs
 - Optimize logging verbosity
 - Better error reporting
+- Add project type display in logs
+- Add issue type to success/failure logs
+- Enhanced LOB value update logic (empty OR different)
+- Add dry-run mode for testing
 
 ## 📅 Planned
 
 ### Feature Additions
 - Handle subtask inheritance for custom fields
 - Implement automation rules for new issues
-- Add dry-run mode for testing
 
 ### Technical Improvements
 - Add test coverage

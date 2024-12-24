@@ -133,21 +133,26 @@ class JiraFieldUpdater:
             self.logger.warning(f"Could not determine project type for {project_key}: {str(e)}")
             return 'undetermined'
 
-    def find_issues_without_field(self, project_key: str, field_id: str) -> List[dict]:
-        """Find all issues in a project that don't have the specified field set."""
+    def find_issues_needing_update(self, project_key: str, field_id: str, target_value: str) -> List[dict]:
+        """Find issues that either have no LOB value or have a different value than target."""
         issues = []
         start_at = 0
         batch_size = 100
-
+        
+        # Remove 'customfield_' prefix for JQL
+        field_num = field_id.replace("customfield_", "")
+        
         while True:
             try:
-                jql = f'project = "{project_key}" AND cf[{field_id.replace("customfield_", "")}] is EMPTY'
+                # JQL to find both empty and different values
+                jql = f'project = "{project_key}" AND (cf[{field_num}] is EMPTY OR cf[{field_num}] != "{target_value}")'
+                
                 search_endpoint = f"{self.base_url}/rest/api/3/search"
                 search_payload = {
                     "jql": jql,
                     "startAt": start_at,
                     "maxResults": batch_size,
-                    "fields": ["id", "key", "issuetype"],
+                    "fields": ["id", "key", "issuetype", field_id]  # Add field_id to get current value
                 }
                 
                 response = requests.post(
@@ -158,13 +163,13 @@ class JiraFieldUpdater:
                 response.raise_for_status()
                 result = response.json()
                 
-                # Now storing both id and key
                 batch_issues = [{
-                    "id": issue['id'], 
+                    "id": issue['id'],
                     "key": issue['key'],
                     "issue_type": issue['fields']['issuetype']['name'],
-                } for issue in result['issues']]                
-                issues.extend(batch_issues)
+                    # Handle None case for empty fields
+                    "current_value": (issue['fields'].get(field_id) or {}).get('value', None),
+                } for issue in result['issues']]
                 
                 if len(batch_issues) < batch_size:
                     break
@@ -219,16 +224,20 @@ class JiraFieldUpdater:
             self.logger.error(f"Failed to get field options: {str(e)}")
             return None
 
-    def update_issue_field(self, issue_id: str, field_id: str, value: str) -> bool:
+    def update_issue_field(self, issue_id: str, field_id: str, value: str, dry_run: bool = False) -> bool:
         try:
             options_response = self.get_field_options(field_id)
             if not options_response:
                 return False
-                    
+            
             option = next((opt for opt in options_response['values'] if opt['value'] == value), None)
             if not option:
                 self.logger.error(f"Value '{value}' not found in available options")
                 return False
+
+            if dry_run:
+                self.logger.info(f"Would update issue {issue_id} with value: {value}")
+                return True
 
             endpoint = f"{self.base_url}/rest/api/3/issue/{issue_id}"
             payload = {
@@ -352,8 +361,10 @@ class JiraFieldUpdater:
                 self.logger.error("Make sure you have automation permissions for this project")
             return False
 
-    def process_all_fields(self) -> Dict[str, Dict[str, Dict[str, int]]]:
+    def process_all_fields(self, dry_run: bool = False) -> Dict[str, Dict[str, Dict[str, int]]]:
         """Process all fields and projects defined in the configuration."""
+        mode = "[DRY RUN] " if dry_run else ""
+        self.logger.info(f"\n{mode}Starting field processing...")
         results = {}
         
         for field_name, field_config in self.config['fields'].items():
@@ -389,7 +400,8 @@ class JiraFieldUpdater:
                     continue                
                 
                 # Find and update issues
-                issues = self.find_issues_without_field(project_key, field_id)
+                issues = self.find_issues_needing_update(project_key, field_id, value)
+
                 project_results['issues_found'] = len(issues)
                 
                 self.logger.info(f"Found {len(issues)} issues to update")
@@ -446,13 +458,14 @@ class JiraFieldUpdater:
         return results
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: jira-defaults config/defaults.yaml")
-        sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("config", help="Path to config file (e.g. config/defaults.yaml)")
+    parser.add_argument("--dry-run", action="store_true", help="Show changes without applying them")
+    args = parser.parse_args()
     
-    config_path = sys.argv[1]
-    updater = JiraFieldUpdater(config_path)
-    results = updater.process_all_fields()
+    updater = JiraFieldUpdater(args.config)
+    results = updater.process_all_fields(dry_run=args.dry_run)
     
     print("\nUpdate Summary:")
     print("=" * 50)
