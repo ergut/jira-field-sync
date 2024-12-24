@@ -190,8 +190,7 @@ class JiraFieldUpdater:
         while True:
             try:
                 # JQL to find both empty and different values
-                jql = f'project = "{project_key}" AND (cf[{field_num}] is EMPTY OR cf[{field_num}] != "{target_value}")'
-                
+                jql = f'project = "{project_key}" AND issuetype != Epic AND (cf[{field_num}] is EMPTY OR cf[{field_num}] != "{target_value}")'                
                 self.logger.debug(f"Searching with JQL: {jql}")  # Add debug logging
                 
                 search_endpoint = f"{self.base_url}/rest/api/3/search"
@@ -393,66 +392,98 @@ class JiraFieldUpdater:
     ) -> bool:
         """Create or update automation rule for setting field on new issues."""
         try:
-            # First, check if rule already exists
-            rules_endpoint = f"{self.base_url}/rest/api/3/automation/rules"
+            # First, get the automation UUID for this project
+            project_endpoint = f"{self.base_url}/gateway/api/automation/internal-api/jira/pro/projects"
             response = requests.get(
-                f"{rules_endpoint}?projectKey={project_key}",
+                project_endpoint,
+                headers=self.headers
+            )
+            response.raise_for_status()
+            projects_data = response.json()
+            
+            # Find our project and get its automation UUID
+            project_data = next(
+                (p for p in projects_data['projects'] if p['projectKey'] == project_key),
+                None
+            )
+            
+            if not project_data:
+                self.logger.error(f"Could not find automation data for project {project_key}")
+                return False
+                
+            automation_uuid = project_data['id']
+            
+            # Now we can construct the correct rules endpoint
+            rules_endpoint = f"{self.base_url}/gateway/api/automation/internal-api/jira/{automation_uuid}/pro/rest/12080/rule"
+            
+            # Get existing rules
+            response = requests.get(
+                rules_endpoint,
                 headers=self.headers
             )
             response.raise_for_status()
             rules = response.json()
             
-            rule_name = f"Set {field_name} for {project_key}"
+            rule_name = f"Set {field_name} for new issues"
             existing_rule = next(
                 (rule for rule in rules['values'] if rule['name'] == rule_name),
                 None
             )
             
-            payload = {
+            # Prepare the rule definition
+            rule_definition = {
                 "name": rule_name,
                 "projectKey": project_key,
                 "trigger": {
-                    "component": "ISSUE_CREATED",
-                    "conditions": [{
-                        "operator": "AND",
-                        "conditions": [{
-                            "field": "project",
-                            "operator": "EQUALS",
-                            "value": project_key
-                        }]
-                    }]
-                },
-                "actions": [{
-                    "component": "FIELD_UPDATE",
-                    "parameters": {
-                        "field": field_id,
-                        "value": value
+                    "id": "jira.issue.created",
+                    "formType": "created",
+                    "type": "issueCreated",
+                    "configuration": {
+                        "projects": [{"value": project_key}]
                     }
-                }]
+                },
+                "components": [
+                    {
+                        "id": "jira.issue.edit",
+                        "type": "action",
+                        "configuration": {
+                            "operations": [
+                                {
+                                    "field": field_id,
+                                    "value": value,
+                                    "type": "fieldValue"
+                                }
+                            ]
+                        }
+                    }
+                ]
             }
             
             if existing_rule:
                 # Update existing rule
+                self.logger.info(f"Updating existing automation rule for {project_key}")
                 response = requests.put(
                     f"{rules_endpoint}/{existing_rule['id']}",
                     headers=self.headers,
-                    json=payload
+                    json=rule_definition
                 )
             else:
                 # Create new rule
+                self.logger.info(f"Creating new automation rule for {project_key}")
                 response = requests.post(
                     rules_endpoint,
                     headers=self.headers,
-                    json=payload
+                    json=rule_definition
                 )
             
             response.raise_for_status()
+            self.logger.info(f"Successfully {'updated' if existing_rule else 'created'} automation rule for {project_key}")
             return True
-            
+                
         except requests.exceptions.RequestException as e:
             self.logger.error(f"Failed to configure automation rule for {project_key}: {str(e)}")
-            if response.status_code == 403:
-                self.logger.error("Make sure you have automation permissions for this project")
+            if hasattr(e, 'response') and e.response:
+                self.logger.error(f"Response content: {e.response.text}")
             return False
 
     def process_all_fields(self, dry_run: bool = False) -> Dict[str, Dict[str, Dict[str, int]]]:
