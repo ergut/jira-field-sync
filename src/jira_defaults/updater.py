@@ -147,7 +147,7 @@ class JiraFieldUpdater:
                     "jql": jql,
                     "startAt": start_at,
                     "maxResults": batch_size,
-                    "fields": ["id", "key"]  # Added key to the fields
+                    "fields": ["id", "key", "issuetype"],
                 }
                 
                 response = requests.post(
@@ -159,7 +159,11 @@ class JiraFieldUpdater:
                 result = response.json()
                 
                 # Now storing both id and key
-                batch_issues = [{"id": issue['id'], "key": issue['key']} for issue in result['issues']]
+                batch_issues = [{
+                    "id": issue['id'], 
+                    "key": issue['key'],
+                    "issue_type": issue['fields']['issuetype']['name'],
+                } for issue in result['issues']]                
                 issues.extend(batch_issues)
                 
                 if len(batch_issues) < batch_size:
@@ -366,8 +370,9 @@ class JiraFieldUpdater:
                     'issues_found': 0,
                     'issues_updated': 0,
                     'automation_rule': False,
-                    'failed_issues': [],
                     'project_type': project_type,
+                    'failed_issues': [],  # Change to store tuples/dicts with (key, type)
+                    'successful_issues': [],  # New field to track successes with type
                 }
 
                 # Check if field is on screens
@@ -390,15 +395,31 @@ class JiraFieldUpdater:
                 self.logger.info(f"Found {len(issues)} issues to update")
                 
                 for issue in issues:
-                    if not self.update_issue_field(issue['id'], field_id, value):
-                        project_results['failed_issues'].append(issue['key'])  # Store the key instead of ID
-                    else:
+                    if self.update_issue_field(issue['id'], field_id, value):
                         project_results['issues_updated'] += 1
-                
+                        project_results['successful_issues'].append({
+                            'key': issue['key'],
+                            'type': issue['issue_type']
+                        })
+                    else:
+                        project_results['failed_issues'].append({
+                            'key': issue['key'],
+                            'type': issue['issue_type']
+                        })
+                         
                 if project_results['failed_issues']:
+                    # Sort failed issues by key
+                    sorted_failed = sorted(project_results['failed_issues'], key=lambda x: x['key'])
+                    
+                    # Convert the sorted list to a formatted string
+                    failed_issues_str = ', '.join([
+                        f"{issue['key']}({issue['type']})" 
+                        for issue in sorted_failed
+                    ])
+                    
                     self.logger.warning(
                         f"\nFailed to update {len(project_results['failed_issues'])} issues in {project_key}:"
-                        f"\nFailed issues: {', '.join(project_results['failed_issues'])}"
+                        f"\nFailed issues: {failed_issues_str}"
                     )
 
                 # Create/update automation rule
@@ -442,7 +463,7 @@ def main():
             print(f"  Issues found without value: {stats['issues_found']}")
             print(f"  Issues successfully updated: {stats['issues_updated']}")
             print(f"  Automation rule: {'✓' if stats['automation_rule'] else '✗'}")
-            
+
     print("\nCheck the log file for detailed information.")
 
 if __name__ == "__main__":
