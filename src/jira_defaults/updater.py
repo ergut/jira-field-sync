@@ -60,7 +60,11 @@ class JiraFieldUpdater:
                 self.logger.debug(f"Field {field_name} ({field_id}) metadata: {metadata}")
             else:
                 self.logger.warning(f"Could not fetch metadata for field {field_name} ({field_id})")
-                                
+
+        self.project_types = {}
+        self._cache_project_types()
+
+
     def _verify_authentication(self):
         """Verify that we can authenticate with Jira."""
         try:
@@ -99,6 +103,35 @@ class JiraFieldUpdater:
         except Exception as e:
             self.logger.error(f"Error loading configuration: {str(e)}")
             sys.exit(1)
+
+    def _cache_project_types(self):
+        """Cache project types for all configured projects"""
+        for field_config in self.config['fields'].values():
+            for project_key in field_config['projects'].keys():
+                if project_key not in self.project_types:
+                    self.project_types[project_key] = self.get_project_type(project_key)
+
+    def get_project_type(self, project_key: str) -> str:
+        """Fetch project type from Jira"""
+        try:
+            response = requests.get(
+                f"{self.base_url}/rest/api/3/project/{project_key}",
+                headers=self.headers
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Check projectTypeKey for next-gen vs company-managed
+            project_type_key = data.get('projectTypeKey', '')
+            if 'next-gen' in project_type_key.lower():
+                return 'next-gen'
+            elif 'software' in project_type_key.lower():
+                return 'company-managed'
+            return 'undetermined'
+            
+        except Exception as e:
+            self.logger.warning(f"Could not determine project type for {project_key}: {str(e)}")
+            return 'undetermined'
 
     def find_issues_without_field(self, project_key: str, field_id: str) -> List[dict]:
         """Find all issues in a project that don't have the specified field set."""
@@ -325,12 +358,16 @@ class JiraFieldUpdater:
             field_id = field_config['id']
             
             for project_key, value in field_config['projects'].items():
-                self.logger.info(f"\nProcessing project {project_key}")
+                # Add project type to logging
+                project_type = self.project_types.get(project_key, 'undetermined')
+                self.logger.info(f"\nProcessing project {project_key} (Type: {project_type})")
+                
                 project_results = {
                     'issues_found': 0,
                     'issues_updated': 0,
                     'automation_rule': False,
-                    'failed_issues': []  # Will now store issue keys instead of just IDs
+                    'failed_issues': [],
+                    'project_type': project_type,
                 }
 
                 # Check if field is on screens
@@ -401,10 +438,11 @@ def main():
     for field_name, field_results in results.items():
         print(f"\nField: {field_name}")
         for project, stats in field_results.items():
-            print(f"\n  Project: {project}")
+            print(f"\n  Project: {project} ({stats['project_type']})")
             print(f"  Issues found without value: {stats['issues_found']}")
             print(f"  Issues successfully updated: {stats['issues_updated']}")
             print(f"  Automation rule: {'✓' if stats['automation_rule'] else '✗'}")
+            
     print("\nCheck the log file for detailed information.")
 
 if __name__ == "__main__":
