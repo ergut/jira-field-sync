@@ -240,54 +240,38 @@ class JiraFieldUpdater:
         return issues
 
     def check_field_screen_config(self, project_key: str, field_id: str):
-        """Check if a field is on the edit screen for a project."""
+        """Check if field is properly configured for the project."""
         try:
-            # First check if project exists and we can access it
-            project_endpoint = f"{self.base_url}/rest/api/3/project/{project_key}"
-            project_response = requests.get(
-                project_endpoint,
+            metadata_response = requests.get(
+                f"{self.base_url}/rest/api/3/issue/createmeta",
+                params={
+                    'projectKeys': project_key,
+                    'expand': 'projects.issuetypes.fields'
+                },
                 headers=self.headers
             )
             
-            if project_response.status_code != 200:
-                self.logger.error(f"Cannot access project {project_key}: {project_response.text}")
-                return False
-
-            # Get all fields for the project
-            fields_response = requests.get(
-                f"{self.base_url}/rest/api/3/field",
-                headers=self.headers
-            )
-            fields_response.raise_for_status()
-            fields = fields_response.json()
-            
-            # Look for our field
-            field = next((f for f in fields if f['id'] == field_id), None)
-            if not field:
-                self.logger.error(f"Field {field_id} not found in available fields")
+            if not metadata_response.ok:
+                self.logger.error(f"Cannot get project metadata: {metadata_response.text}")
                 return False
                 
-            self.logger.info(f"\nFound field {field_id} ({field.get('name', 'Unknown')})")
+            metadata = metadata_response.json()
+            projects = metadata.get('projects', [])
             
-            # Try to get field configuration
-            field_config_response = requests.get(
-                f"{self.base_url}/rest/api/3/field/{field_id}/context",
-                headers=self.headers
-            )
-            
-            if field_config_response.status_code != 200:
-                self.logger.warning(
-                    f"Could not verify field configuration for {field_id} in project {project_key}. "
-                    f"Response: {field_config_response.text}"
-                )
+            if not projects:
+                return False
                 
-            return True
+            # Check if field exists in any issuetype
+            for issuetype in projects[0].get('issuetypes', []):
+                if field_id in issuetype.get('fields', {}):
+                    return True
                     
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Failed to get field config for project {project_key}: {str(e)}")
-            if hasattr(e, 'response') and e.response is not None:
-                self.logger.error(f"Response content: {e.response.text}")
             return False
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Request failed: {str(e)}")
+            return False
+
 
     def get_field_options(self, field_id: str) -> dict:
         """Get available options for a select field."""
@@ -652,7 +636,7 @@ class JiraFieldUpdater:
                 status = self.get_field_status(project_key, field_id, target_value)
                 if status:
                     project_type = self.project_types.get(project_key, 'undetermined')
-                    self.logger.info(f"  Project: {project_key} ({project_type})")
+                    self.logger.info(f"\n  Project: {project_key} ({project_type})")
                     self.logger.info(f"  Target Value: {target_value}")
                     self.logger.info(f"  Field Configured: {'✓' if status['field_configured'] else '✗'}")
                     self.logger.info(f"  Total Issues: {status['total']}")
