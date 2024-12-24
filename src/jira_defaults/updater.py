@@ -192,12 +192,14 @@ class JiraFieldUpdater:
                 # JQL to find both empty and different values
                 jql = f'project = "{project_key}" AND (cf[{field_num}] is EMPTY OR cf[{field_num}] != "{target_value}")'
                 
+                self.logger.debug(f"Searching with JQL: {jql}")  # Add debug logging
+                
                 search_endpoint = f"{self.base_url}/rest/api/3/search"
                 search_payload = {
                     "jql": jql,
                     "startAt": start_at,
                     "maxResults": batch_size,
-                    "fields": ["id", "key", "issuetype", field_id]  # Add field_id to get current value
+                    "fields": ["id", "key", "issuetype", field_id]
                 }
                 
                 response = requests.post(
@@ -205,16 +207,25 @@ class JiraFieldUpdater:
                     headers=self.headers,
                     json=search_payload
                 )
-                response.raise_for_status()
+                
+                if response.status_code != 200:
+                    self.logger.error(
+                        f"Failed to search issues for {project_key}:"
+                        f"\nStatus code: {response.status_code}"
+                        f"\nResponse: {response.text}"
+                    )
+                    break
+                    
                 result = response.json()
                 
                 batch_issues = [{
                     "id": issue['id'],
                     "key": issue['key'],
                     "issue_type": issue['fields']['issuetype']['name'],
-                    # Handle None case for empty fields
                     "current_value": (issue['fields'].get(field_id) or {}).get('value', None),
                 } for issue in result['issues']]
+                
+                issues.extend(batch_issues)
                 
                 if len(batch_issues) < batch_size:
                     break
@@ -223,6 +234,8 @@ class JiraFieldUpdater:
                 
             except requests.exceptions.RequestException as e:
                 self.logger.error(f"Error finding issues for {project_key}: {str(e)}")
+                if hasattr(e, 'response') and e.response is not None:
+                    self.logger.error(f"Response content: {e.response.text}")
                 break
         
         return issues
@@ -230,28 +243,52 @@ class JiraFieldUpdater:
     def check_field_screen_config(self, project_key: str, field_id: str):
         """Check if a field is on the edit screen for a project."""
         try:
-            # Get all fields
-            response = requests.get(
+            # First check if project exists and we can access it
+            project_endpoint = f"{self.base_url}/rest/api/3/project/{project_key}"
+            project_response = requests.get(
+                project_endpoint,
+                headers=self.headers
+            )
+            
+            if project_response.status_code != 200:
+                self.logger.error(f"Cannot access project {project_key}: {project_response.text}")
+                return False
+
+            # Get all fields for the project
+            fields_response = requests.get(
                 f"{self.base_url}/rest/api/3/field",
                 headers=self.headers
             )
-            response.raise_for_status()
-            fields = response.json()
+            fields_response.raise_for_status()
+            fields = fields_response.json()
             
             # Look for our field
             field = next((f for f in fields if f['id'] == field_id), None)
-            if field:
-                self.logger.info(f"Found field {field_id} ({field.get('name', 'Unknown')})")
-                return True
+            if not field:
+                self.logger.error(f"Field {field_id} not found in available fields")
+                return False
                 
-            self.logger.warning(f"Field {field_id} not found in available fields")
-            return False
+            self.logger.info(f"Found field {field_id} ({field.get('name', 'Unknown')})")
+            
+            # Try to get field configuration
+            field_config_response = requests.get(
+                f"{self.base_url}/rest/api/3/field/{field_id}/context",
+                headers=self.headers
+            )
+            
+            if field_config_response.status_code != 200:
+                self.logger.warning(
+                    f"Could not verify field configuration for {field_id} in project {project_key}. "
+                    f"Response: {field_config_response.text}"
+                )
                 
+            return True
+                    
         except requests.exceptions.RequestException as e:
             self.logger.error(f"Failed to get field config for project {project_key}: {str(e)}")
-            if hasattr(e, 'response') and hasattr(e.response, 'text'):
+            if hasattr(e, 'response') and e.response is not None:
                 self.logger.error(f"Response content: {e.response.text}")
-            return None
+            return False
 
     def get_field_options(self, field_id: str) -> dict:
         """Get available options for a select field."""
